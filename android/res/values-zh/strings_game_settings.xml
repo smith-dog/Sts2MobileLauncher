@@ -916,6 +916,9 @@
     <string name="in_game_overlay_devtools_request_timeout">游戏桥接正忙，暂未响应。请稍候再试。</string>
     <string name="high_refresh_rate_switch">请求高刷新率</string>
     <string name="high_refresh_rate_hint">默认开启。进游戏时会向 Android 请求当前屏幕可用的最高刷新率，并同步到渲染 Surface；实际 FPS 仍受游戏内帧率上限影响。若发热、耗电或设备显示异常可关闭。</string>
+    <string name="display_refresh_rate_mode">屏幕刷新率模式</string>
+    <string name="display_refresh_rate_mode_high">请求最高（默认）</string>
+    <string name="display_refresh_rate_mode_lock60">锁定 60Hz（修复节拍错位顿挫）</string>
     <string name="preload_hint">这里只控制总开关。点击右侧箭头可详细管理预加载项目。</string>
     <string name="preload_advanced_title">预加载详细管理</string>
     <string name="preload_advanced_subtitle">选择启动和运行时分别预热哪些缓存。</string>

@@ -21,6 +21,11 @@ import org.godotengine.godot.GodotRenderView;
 final class HighRefreshRateController {
 	private static final String TAG = "Sts2Re";
 	private static final float MIN_TARGET_HZ = 61.0f;
+	// Lock-60 mode: the game renders at a 60 fps cap, so a 1:1 display beat is the
+	// only configuration that cannot misalign. On this device the 120 Hz surface
+	// dropped steady-state combat to ~30 fps and the 144 Hz request produced
+	// periodic 50-80 ms stall strings (2026-10-02 sessions).
+	private static final float LOCK60_TARGET_HZ = 60.0f;
 	private static final long[] RETRY_DELAYS_MS = {100L, 500L, 1500L};
 	private static final long VERIFY_DELAY_MS = 1200L;
 
@@ -28,6 +33,7 @@ final class HighRefreshRateController {
 	private Activity activity;
 	private Godot godot;
 	private boolean enabled;
+	private boolean lock60;
 	private boolean resumed;
 	private boolean focused;
 	private boolean destroyed;
@@ -98,6 +104,25 @@ final class HighRefreshRateController {
 			this.activity = activity;
 			this.godot = godot;
 			enabled = true;
+			lock60 = false;
+			startGeneration(reason);
+		});
+	}
+
+	// Pin the display to the mode closest to 60 Hz (same resolution) instead of
+	// requesting the highest refresh rate. The game renders at a 60 fps cap, so a
+	// 1:1 beat is the only configuration that cannot misalign with the present
+	// queue; on this device the 120 Hz surface halved combat fps and the 144 Hz
+	// request produced periodic stall strings.
+	void requestLock60(Activity activity, Godot godot, String reason) {
+		runOnUiThread(activity, () -> {
+			if (destroyed) {
+				return;
+			}
+			this.activity = activity;
+			this.godot = godot;
+			enabled = true;
+			lock60 = true;
 			startGeneration(reason);
 		});
 	}
@@ -243,8 +268,8 @@ final class HighRefreshRateController {
 				return;
 			}
 
-			ModeChoice choice = chooseBestMode(activity);
-			if (choice.refreshRate < MIN_TARGET_HZ) {
+			ModeChoice choice = lock60 ? chooseLock60Mode(activity) : chooseBestMode(activity);
+			if (choice.refreshRate < (lock60 ? 1.0f : MIN_TARGET_HZ)) {
 				Log.i(TAG, diagnostic("unsupported", reason, "displayHz=" + choice.currentRefreshRate));
 				return;
 			}
@@ -557,8 +582,51 @@ final class HighRefreshRateController {
 			useRefreshRateOnly ? "alternative-refresh-rate" : "exact-mode");
 	}
 
-	private static float highestAlternativeRefreshRate(Display.Mode mode) {
-		float bestRefreshRate = 0.0f;
+	// Pick the supported mode with the same resolution as the current one whose
+	// refresh rate is closest to 60 Hz. The frame-rate vote then targets that
+	// mode exactly, giving the 60 fps render loop a 1:1 present beat.
+	private static ModeChoice chooseLock60Mode(Activity activity) {
+		Display display = getActivityDisplay(activity);
+		if (display == null) {
+			return new ModeChoice(0, 0.0f, 0, 0);
+		}
+		Display.Mode current = Build.VERSION.SDK_INT >= 23 ? display.getMode() : null;
+		Display.Mode[] modes = Build.VERSION.SDK_INT >= 23 ? display.getSupportedModes() : new Display.Mode[0];
+		int currentWidth = current == null ? 0 : current.getPhysicalWidth();
+		int currentHeight = current == null ? 0 : current.getPhysicalHeight();
+		int currentModeId = current == null ? 0 : current.getModeId();
+		float currentModeRefreshRate = current == null ? display.getRefreshRate() : current.getRefreshRate();
+
+		Display.Mode best = null;
+		float bestDistance = Float.MAX_VALUE;
+		for (Display.Mode mode : modes) {
+			if (mode == null) {
+				continue;
+			}
+			boolean sameSize = currentWidth <= 0 || currentHeight <= 0
+				|| (mode.getPhysicalWidth() == currentWidth && mode.getPhysicalHeight() == currentHeight);
+			if (!sameSize) {
+				continue;
+			}
+			float distance = Math.abs(mode.getRefreshRate() - LOCK60_TARGET_HZ);
+			if (distance < bestDistance - 0.01f) {
+				bestDistance = distance;
+				best = mode;
+			}
+		}
+		if (best == null) {
+			// No same-size mode list available: fall back to a refresh-rate-only
+			// vote, which the platform may still honour.
+			return new ModeChoice(0, LOCK60_TARGET_HZ,
+				currentWidth, currentHeight, display.getRefreshRate(), currentModeId, currentModeRefreshRate,
+				"lock60-refresh-rate-only");
+		}
+		return new ModeChoice(best.getModeId(), best.getRefreshRate(),
+			best.getPhysicalWidth(), best.getPhysicalHeight(), display.getRefreshRate(),
+			currentModeId, currentModeRefreshRate, "lock60-exact-mode");
+	}
+
+	private static float highestAlternativeRefreshRate(Display.Mode mode) {		float bestRefreshRate = 0.0f;
 		if (mode == null || Build.VERSION.SDK_INT < 31) {
 			return bestRefreshRate;
 		}

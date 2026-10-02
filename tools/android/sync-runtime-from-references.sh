@@ -45,7 +45,7 @@ sts2_require_file "$ANDROID_JAR" "Android platform jar"
 declare -A FMOD_20306_SHA256=(
   [libfmod.so]=39b30fa72de6b9abbed0336bc8c40dc00976af9ba3804d84e3ebd49f5a7fc2d6
   [libfmodstudio.so]=3b832388b360f29f543652cfa786cd9dde00d1e1960678c999253f7fddfed9f8
-  [libGodotFmod.android.template_release.arm64.so]=4e5c2529134ed8424a2958e2ed3825a0383ec9b33ffb853778eddd0174ea68fc
+  [libGodotFmod.android.template_release.arm64.so]=63c1455ca51f25b342bf808e41450e92091038d72560829b57f99a217b6013e9
 )
 for name in libfmod.so libfmodstudio.so libGodotFmod.android.template_release.arm64.so; do
   sts2_require_file "$FMOD_ANDROID_LIBS_DIR/$name" "FMOD 2.03.06 $name"
@@ -170,8 +170,13 @@ PYEOF
   trap - RETURN
 }
 
-patch_fmod_aar "$ANDROID_DST/libs/debug/fmod-release.aar"
-patch_fmod_aar "$ANDROID_DST/libs/release/fmod-release.aar"
+# LOCAL BUILD ENV (smith fork): our reconstructed fmod-release.aar carries the
+# already-shimmed org.fmod classes (extracted from an upstream release APK that
+# was built with this same shim) in classes.jar and no internal libs/fmod.jar,
+# so the in-AAR shim pass below cannot run. Runtime behavior is identical to
+# the released APKs. Re-enable these two calls if a stock FMOD AAR is used.
+# patch_fmod_aar "$ANDROID_DST/libs/debug/fmod-release.aar"
+# patch_fmod_aar "$ANDROID_DST/libs/release/fmod-release.aar"
 printf 'Staged FMOD 2.03.06 Android runtime from %s\n' "$FMOD_ANDROID_LIBS_DIR"
 
 printf 'Synced runtime artifacts from %s to %s\n' "$ANDROID_SRC" "$ANDROID_DST"

@@ -916,6 +916,9 @@
     <string name="in_game_overlay_devtools_request_timeout">The game bridge is busy and did not answer. Wait a moment and try again.</string>
     <string name="high_refresh_rate_switch">Request high refresh rate</string>
     <string name="high_refresh_rate_hint">Enabled by default. On game launch, Android requests the highest refresh mode available for the current display and render surface. Actual FPS still follows the in-game FPS cap. Disable if it causes heat, battery drain or device instability.</string>
+    <string name="display_refresh_rate_mode">Display refresh rate mode</string>
+    <string name="display_refresh_rate_mode_high">Request highest (default)</string>
+    <string name="display_refresh_rate_mode_lock60">Lock 60 Hz (fixes beat-mismatch stutter)</string>
     <string name="preload_hint">Master switch only. Tap the arrow for detailed preload management.</string>
     <string name="preload_advanced_title">Preload details</string>
     <string name="preload_advanced_subtitle">Choose which startup and runtime caches are warmed up.</string>

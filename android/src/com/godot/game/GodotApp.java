@@ -164,6 +164,7 @@ public class GodotApp extends GodotActivity {
 		boolean launchPrepared = getIntent().getBooleanExtra("launch_prepared", false);
 		Log.e(TAG, "DIAG_FORCE GodotApp.onCreate launch_prepared=" + launchPrepared + " forcing_pre_super_prepare=true");
 		ensureLaunchPreparedBeforeGodot(launchPrepared);
+		configureMonoGcParams();
 		logGodotAppLaunchSnapshot("onCreate_before_super");
 		super.onCreate(savedInstanceState);
 		applyConfiguredScreenOrientation();
@@ -203,6 +204,22 @@ public class GodotApp extends GodotActivity {
 			+ "; data=" + intent.getDataString()
 			+ "; flags=0x" + Integer.toHexString(intent.getFlags())
 			+ "; extras=" + (extras == null ? "null" : extras.keySet().toString());
+	}
+
+	// SGen (the bundled MonoVM collector) reads MONO_GC_PARAMS once at
+	// runtime init, before any managed code runs. The stock 4 MB nursery
+	// forced a minor collection every ~2.6 s and blocking major collections
+	// produced 200-800 ms combat frame spikes; a larger nursery plus the
+	// concurrent major collector moves both off the visible frame path. Must
+	// run before super.onCreate() loads the engine and libmonosgen reads the
+	// environment.
+	private void configureMonoGcParams() {
+		try {
+			android.system.Os.setenv("MONO_GC_PARAMS", "nursery-size=256m,major=marksweep-conc", true);
+			Log.i(TAG, "MONO_GC_PARAMS set: nursery-size=256m,major=marksweep-conc");
+		} catch (Exception exception) {
+			Log.w(TAG, "Unable to set MONO_GC_PARAMS; using SGen defaults.", exception);
+		}
 	}
 
 	private void logGodotAppLaunchSnapshot(String phase) {
@@ -686,6 +703,24 @@ public class GodotApp extends GodotActivity {
 	}
 
 	private void requestHighRefreshRate(String reason) {
+		// Three-state display mode (TASK-051): "lock60" pins the display to the
+		// 60 Hz mode closest to the game's 60 fps cap; anything else keeps the
+		// stock high-refresh behaviour. "off" still means "do not request".
+		String displayMode = "high";
+		try {
+			displayMode = new ExtraSettingsRepository(this).loadSettingsJson()
+				.optString("android_display_refresh_rate_mode", "high");
+		} catch (Exception exception) {
+			Log.w(TAG, "Unable to read display refresh rate mode; using high refresh default.", exception);
+		}
+		if ("lock60".equals(displayMode)) {
+			if (!new ExtraSettingsRepository(this).isHighRefreshRateEnabledForLaunch()) {
+				highRefreshRateController.disable(this, reason);
+				return;
+			}
+			highRefreshRateController.requestLock60(this, getGodot(), reason);
+			return;
+		}
 		if (!new ExtraSettingsRepository(this).isHighRefreshRateEnabledForLaunch()) {
 			highRefreshRateController.disable(this, reason);
 			return;
