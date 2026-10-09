@@ -99,6 +99,7 @@ tools/android/sync-runtime-from-references.sh
 - crypto native jar
 - FMOD 2.03.06 Android 三件套：`libfmod.so`、`libfmodstudio.so`、`libGodotFmod.android.template_release.arm64.so`。默认从 `STS2_FMOD_PLUGIN_AAR` 同级的 `arm64/` 读取，也可通过 `STS2_FMOD_ANDROID_LIBS_DIR` / `runtime.fmod_android_libs_dir` 指定；同步前核对已知 2.03.06 SHA，拒绝旧 2.02 和混用版本，然后覆盖参考 runtime 中 debug/release 两套 staged native 文件并移除未使用、依赖未打包 `libfmodL` 的 debug 桥。不能只升级两个 FMOD 引擎库而保留旧 Godot 桥。
 - FMOD AAR，并应用 `tools/android/fmod-shim/` 中的 Java shim；当前 2.03.06 native 使用 `getDevices`/设备名/类型 JNI 接口，仍保留旧 `getAudioDevices(int)` 接口。两条路径统一过滤 remote-submix，耳机/USB/蓝牙输出变化分别通知设备枚举与 AAudio 重连。`audio_compatibility_mode` 在 native 初始化前决定是否禁用 AAudio/低延迟路径；同步脚本替换全部生成的 `FMOD*.class` 并校验 AAR 内 `libs/fmod.jar`，缺少目标 jar 或 class 时直接终止构建。
+- Godot template AAR 的输入池修补：`tools/android/patch-godot-input-pool.py` 只修改 staged debug/release AAR，把 `GodotInputHandler` 对未处理的 mouse action（包括 `ACTION_BUTTON_PRESS/RELEASE`）的过滤提前到 `InputEventRunnable.obtain()` 之前，参考 AAR 不变；`tools/android/test-godot-input-pool.sh` 校验包装类不取得 pooled runnable 且支持事件仍委托给原始路径。
 - Gradle wrapper jar
 
 这些产物位于 `android/assets/dotnet_bcl/`、`android/libs/` 等 gitignored 路径，不手工维护。长期源码化状态和剩余阻塞见 [`source-dependencies.md`](source-dependencies.md)。
@@ -172,6 +173,22 @@ tools/android/gradle-with-s2-env.sh testMonoReleaseUnitTest \
 ```
 
 验证边界：托管 harness 强制 helper 的 Mono 分支，在受控原生缓冲区验证 true/false/重复调用不改字节、缓存及异常释放锁，并在宿主运行时执行真实 Cecil 私有成员/跨生成程序集调用和 Harmony patch/unpatch。它不是 Android Mono 或玩家 MOD 组合的真机验证。`LD_PRELOAD` 仅为 Linux Harmony 验证环境要求，不打入 APK。本修复与默认关闭的内存总量实验独立，不修改 native Mono、GC/堆上限、Godot `StringName`、游戏 DLL 或用户 MOD。
+
+### 4.3 Godot Android 输入事件池修复
+
+Godot 4.5.1 的 `GodotInputHandler.handleMouseEvent` 会先调用 `InputEventRunnable.obtain()`，随后才过滤不转发的 `ACTION_BUTTON_PRESS` / `ACTION_BUTTON_RELEASE`。实体鼠标一次点击通常包含 DOWN、BUTTON_PRESS、BUTTON_RELEASE、UP；两个未处理事件会占用 1,200 个 pooled runnable 中的槽位而不归还，长时间使用后会出现 `Input event pool is at capacity`，触摸、鼠标和键盘输入都会停止。
+
+`sync-runtime-from-references.sh` 对 debug/release **staged** Godot template AAR 运行 `tools/android/patch-godot-input-pool.py`。修补器保留原始处理器作为内部 base，叠加一个只在 `obtain()` 前过滤未处理 action 的小包装类；支持的 mouse action 仍委托给原始实现，参考 runtime 不会被修改，也不改变 Android/游戏输入协议。AAR 缺少预期 handler/gesture class 时构建直接失败，避免把补丁静默应用到未知 Godot ABI。
+
+```bash
+# 检查两个本地参考 AAR 的修补结果；不会修改参考输入。
+tools/android/test-godot-input-pool.sh
+
+# 完整构建会自动同步并应用修补，然后生成 importer APK。
+tools/package/build_importer_apk.sh
+```
+
+静态回归确认包装类不再取得 pooled runnable、原始支持事件路径仍存在，并覆盖 debug/release 两个 AAR。它不能替代蓝牙/USB 鼠标真机长时间测试；真机应确认持续点击数超过 600 次后触摸、鼠标和键盘仍可用，且 logcat 不再刷 `Input event pool is at capacity`。
 
 ## 5. 构建当前 compat fallback
 
@@ -359,7 +376,7 @@ tools/package/build_importer_apk.sh
 4. 执行 `local.properties` 中的 `android.gradle.task`（默认 `assembleMonoRelease`）。
 5. 复制 APK 到 `android.importer.dist`（默认 `dist/sts2-re-importer.apk`）。
 
-正式 APK 默认声明 `android:appCategory="game"` / `android:isGame="true"`，让 OEM 游戏/GPU 调度识别 `GodotApp`；同时采用高刷新兼容模式。`GodotApp` 在启动、恢复前台、获得焦点和 Godot 主循环开始后只向 Activity 级 `HighRefreshRateController` 发起 generation 请求；控制器仅在 Activity resumed + focused 且 Godot `SurfaceView`/`Surface` 有效时实际应用，并在失去焦点、pause、destroy 或 Surface 销毁后取消延迟工作。控制器同时跟踪 surface epoch，以 100/500/1500ms 有限重试等待有效 Surface；Android 12+ 对每个 epoch 只调用一次 `Surface.setFrameRate(..., CHANGE_FRAME_RATE_ALWAYS)`。显式高刷 mode 使用对应 `preferredDisplayModeId`，仅有 alternative refresh rate 时清空 mode ID 并使用 `preferredRefreshRate`；随后延迟验证实际 mode/Hz，不使用 `SurfaceControl`。设置页“系统”分区提供默认关闭的“Show performance overlay”开关；开启后下次启动会加载 `godot-debug-menu`，显示 FPS、帧时间、CPU/GPU frame graph 和渲染器/硬件信息。
+正式 APK 默认声明 `android:appCategory="game"` / `android:isGame="true"`，让 OEM 游戏/GPU 调度识别 `GodotApp`。设置页“系统”分区预加载下方及游戏内 Android 设置提供三挡刷新率：默认高刷、请求 60Hz、跟随系统，对应 `android_display_refresh_rate_mode=high/60hz/system`。旧高刷开关 true/false 迁移为 high/system；新字段优先，迁移后移除旧字段。60Hz 只接受当前尺寸下的近似 60Hz（含 59.94Hz）目标，设备不暴露目标时撤销旧请求并交回系统，不保证 OEM 采纳，也不改变游戏 FPS 上限或 VSync。`HighRefreshRateController` 只在 resumed + focused + render Surface 有效时应用，失焦、pause、destroy 或 Surface 销毁时取消延迟任务，以 100/500/1500ms 有限重试等待 Surface。Android 12+ 使用 `CHANGE_FRAME_RATE_ALWAYS`，同一 Surface 未变的请求不重复投票，三挡切换允许更新/撤销 vote；精确 mode 使用 `preferredDisplayModeId`，alternative-only 清空 mode ID 并使用 `preferredRefreshRate`，随后有界验证实际 mode/Hz。不使用 `SurfaceControl` 或改 Surface 尺寸。设置页同一分区保留默认关闭的“Show performance overlay”开关；开启后下次启动加载 `godot-debug-menu`，显示 FPS、帧时间、CPU/GPU frame graph 和渲染器/硬件信息。
 
 Java 不再把 `fullscreen_render_size` 转换为 Godot `--resolution`。根窗口始终使用 `CanvasItems`：Auto 比例取 UI scale target，固定比例取对应 fixed target，`global_scale` 独立作为 `ContentScaleFactor`。游戏内切换 `fullscreen_render_size` 后，compat 会先完成高层 `ContentScale*` setter，再只用 `RenderingServer.ViewportSetRenderDirectToScreen(false)`、`ViewportSetSize()` 与 `ViewportSetGlobalCanvasTransform()` 即时调整根 renderer RT；scene Window、输入变换与 Android Surface 均不改变，也不使用 `SurfaceHolder.setFixedSize()` 或 `ViewportAttachToScreen()`。`0x0` 恢复 native attachment 尺寸与原始 canvas transform；非零预设按当前 native attachment 比例以 Expand 语义覆盖请求矩形，例如 `2400x1080` 设备选择 `1280x720` 时实际 target 为 `1600x720`。自定义目标长边上限为 `max(4096, native 长边)`。根 Window `SizeChanged`、resume 与 ContentScale repair 后会重投 renderer 状态，因此动态切换前后内容相对大小与触控坐标保持不变，高刷 Surface 生命周期也不受分辨率切换影响。
 

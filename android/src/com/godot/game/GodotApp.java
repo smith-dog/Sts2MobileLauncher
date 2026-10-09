@@ -171,7 +171,7 @@ public class GodotApp extends GodotActivity {
 		currentInstance = this;
 		currentWindowFocused = hasWindowFocus();
 		logGodotAppLaunchSnapshot("onCreate_after_super");
-		requestHighRefreshRate("onCreate_after_super");
+		requestDisplayRefreshRate("onCreate_after_super");
 		scheduleInGameOverlayAttach("onCreate_after_super");
 		floatingMouseInputController = new FloatingMouseInputController(this);
 		Log.i(TAG, "DIAG GodotApp.onCreate end windowFocused=" + currentWindowFocused);
@@ -702,30 +702,14 @@ public class GodotApp extends GodotActivity {
 		return intent;
 	}
 
-	private void requestHighRefreshRate(String reason) {
-		// Three-state display mode (TASK-051): "lock60" pins the display to the
-		// 60 Hz mode closest to the game's 60 fps cap; anything else keeps the
-		// stock high-refresh behaviour. "off" still means "do not request".
-		String displayMode = "high";
-		try {
-			displayMode = new ExtraSettingsRepository(this).loadSettingsJson()
-				.optString("android_display_refresh_rate_mode", "high");
-		} catch (Exception exception) {
-			Log.w(TAG, "Unable to read display refresh rate mode; using high refresh default.", exception);
-		}
-		if ("lock60".equals(displayMode)) {
-			if (!new ExtraSettingsRepository(this).isHighRefreshRateEnabledForLaunch()) {
-				highRefreshRateController.disable(this, reason);
-				return;
-			}
-			highRefreshRateController.requestLock60(this, getGodot(), reason);
-			return;
-		}
-		if (!new ExtraSettingsRepository(this).isHighRefreshRateEnabledForLaunch()) {
-			highRefreshRateController.disable(this, reason);
-			return;
-		}
-		highRefreshRateController.request(this, getGodot(), reason);
+	private void requestDisplayRefreshRate(String reason) {
+		String mode = new ExtraSettingsRepository(this).getDisplayRefreshRateModeForLaunch();
+		HighRefreshRateController.RefreshRateMode requestMode = switch (mode) {
+			case ExtraSettingsRepository.DISPLAY_REFRESH_RATE_60HZ -> HighRefreshRateController.RefreshRateMode.HZ60;
+			case ExtraSettingsRepository.DISPLAY_REFRESH_RATE_SYSTEM -> HighRefreshRateController.RefreshRateMode.SYSTEM;
+			default -> HighRefreshRateController.RefreshRateMode.HIGH;
+		};
+		highRefreshRateController.request(this, getGodot(), requestMode, reason);
 	}
 
 	@Override
@@ -737,7 +721,7 @@ public class GodotApp extends GodotActivity {
 		highRefreshRateController.onResumed(this, getGodot(), currentWindowFocused);
 		applyConfiguredScreenOrientation();
 		updateWindowAppearance.run();
-		requestHighRefreshRate("onResume");
+		requestDisplayRefreshRate("onResume");
 		if (inGameOverlayController != null) {
 			inGameOverlayController.onResume();
 		} else {
@@ -828,6 +812,10 @@ public class GodotApp extends GodotActivity {
 
 		int orientation;
 		switch (mode) {
+			case ExtraSettingsRepository.SCREEN_ROTATION_PORTRAIT:
+				orientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+				disableOrientationEventListener();
+				break;
 			case ExtraSettingsRepository.SCREEN_ROTATION_LANDSCAPE:
 				orientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
 				disableOrientationEventListener();
@@ -943,7 +931,7 @@ public class GodotApp extends GodotActivity {
 		currentWindowFocused = hasFocus;
 		highRefreshRateController.onWindowFocusChanged(this, getGodot(), hasFocus);
 		if (hasFocus) {
-			requestHighRefreshRate("onWindowFocusChanged");
+			requestDisplayRefreshRate("onWindowFocusChanged");
 		}
 		if (floatingMouseInputController != null) {
 			floatingMouseInputController.onWindowFocusChanged(hasFocus);
@@ -984,7 +972,7 @@ public class GodotApp extends GodotActivity {
 		applyConfiguredScreenOrientation();
 		runOnUiThread(updateWindowAppearance);
 		scheduleInGameOverlayAttach("onGodotMainLoopStarted");
-		requestHighRefreshRate("onGodotMainLoopStarted");
+		requestDisplayRefreshRate("onGodotMainLoopStarted");
 		runOnUiThread(() -> {
 			if (floatingMouseInputController != null) {
 				floatingMouseInputController.onGodotMainLoopStarted();
@@ -998,6 +986,13 @@ public class GodotApp extends GodotActivity {
 			return;
 		}
 		activity.runOnUiThread(activity::applyConfiguredScreenOrientation);
+	}
+
+	public static void applySelectedDisplayRefreshRateFromGame() {
+		GodotApp activity = currentInstance;
+		if (activity != null) {
+			activity.runOnUiThread(() -> activity.requestDisplayRefreshRate("in_game_settings"));
+		}
 	}
 
 	public static boolean isGameWindowInteractive() {

@@ -21,6 +21,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
@@ -106,6 +107,15 @@
             android:resizeableActivity="true" />
 
         <activity
+            android:name=".WorkshopImageViewerActivity"
+            android:label="@string/workshop_image_viewer_title"
+            android:theme="@style/Theme.Sts2ExtraSettings"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:windowSoftInputMode="adjustResize"
+            android:resizeableActivity="true" />
+
+        <activity
             android:name=".SteamWorkshopActivity"
             android:label="@string/workshop_title"
             android:theme="@style/Theme.Sts2ExtraSettings"
@@ -135,7 +145,7 @@
         <activity
             android:name=".LogViewerActivity"
             android:label="@string/log_viewer_title"
-            android:theme="@style/Theme.Sts2Crash"
+            android:theme="@style/Theme.Sts2Tools"
             android:exported="false"
             android:screenOrientation="unspecified"
             android:windowSoftInputMode="adjustResize"
@@ -144,7 +154,16 @@
         <activity
             android:name=".LogFileViewerActivity"
             android:label="@string/log_file_viewer_title"
-            android:theme="@style/Theme.Sts2Crash"
+            android:theme="@style/Theme.Sts2Tools"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:windowSoftInputMode="adjustResize"
+            android:resizeableActivity="true" />
+
+        <activity
+            android:name=".loganalysis.LogAnalysisActivity"
+            android:label="@string/log_analysis_title"
+            android:theme="@style/Theme.Sts2Tools"
             android:exported="false"
             android:screenOrientation="unspecified"
             android:windowSoftInputMode="adjustResize"
@@ -153,7 +172,7 @@
         <activity
             android:name=".FileBrowserActivity"
             android:label="@string/file_browser_title"
-            android:theme="@style/Theme.Sts2Crash"
+            android:theme="@style/Theme.Sts2Tools"
             android:exported="false"
             android:screenOrientation="unspecified"
             android:windowSoftInputMode="adjustResize"

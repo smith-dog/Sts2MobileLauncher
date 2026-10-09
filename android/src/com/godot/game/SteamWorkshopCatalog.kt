@@ -119,6 +119,36 @@ class SteamWorkshopCatalog(private val context: android.content.Context) {
         }
     }
 
+    fun loadSubscriptions(page: Int, pageSize: Int): SearchResult = runBlocking {
+        val appContext = context.applicationContext
+        val auth = SteamAuthStore.readAuthMaterial(appContext)
+            ?: throw IOException(context.getString(R.string.workshop_subscriptions_login_required))
+        val steamId = authSteamIdOrNull(appContext)?.takeIf { it > 0L }
+            ?: SteamLoginCoordinator.verifyRefreshToken(appContext).trim().toLongOrNull()?.takeIf { it > 0L }
+            ?: throw IOException(context.getString(R.string.workshop_subscriptions_login_required))
+        val currentAuth = SteamAuthStore.readAuthMaterial(appContext)
+        if (currentAuth == null || currentAuth.accountName != auth.accountName || currentAuth.refreshToken != auth.refreshToken) {
+            throw IOException(context.getString(R.string.workshop_subscriptions_account_changed))
+        }
+        val identity = SteamClientIdentity(appContext)
+        val client = SteamNetworkClientFactory.createDefaultClient()
+        val publishedFileClient = SteamPublishedFileClient(
+            directoryClient = SteamDirectoryClient(client),
+            sessionFactory = { identity.createSession(client) },
+        )
+        publishedFileClient.querySubscriptions(
+            account = SteamAccountSession(
+                accountName = auth.accountName,
+                steamId = steamId,
+                refreshToken = auth.refreshToken,
+                machineName = identity.machineName,
+            ),
+            appId = SteamWorkshopPreferences.DEFAULT_APP_ID.toUInt(),
+            page = page,
+            pageSize = pageSize,
+        ).toSearchResult(page.coerceAtLeast(1))
+    }
+
     fun runDiagnostics(query: String, page: Int, pageSize: Int): JSONObject {
         val diagnostics = JSONObject()
         diagnostics.put("query", query)
@@ -458,11 +488,14 @@ class SteamWorkshopCatalog(private val context: android.content.Context) {
     }
 
     private fun parseSsrBrowsePage(payload: String, page: Int, pageSize: Int): PublicBrowsePage? {
-        val encoded = ssrRenderContextRegex.find(payload)?.groupValues?.getOrNull(1) ?: return null
-        val renderContext = decodeJsonStringLiteral(encoded) ?: return null
-        val queryData = runCatching {
-            JSONObject(renderContext).optString("queryData", "")
-        }.getOrDefault("")
+        // The data script contains JSON, not an HTML-encoded or escaped JavaScript string.
+        val renderContext = ssrDataScriptRegex.find(payload)?.groupValues?.getOrNull(1)
+            ?.let { runCatching { JSONObject(it).optJSONObject("renderContext") }.getOrNull() }
+            ?: ssrRenderContextRegex.find(payload)?.groupValues?.getOrNull(1)
+                ?.let(::decodeJsonStringLiteral)
+                ?.let { runCatching { JSONObject(it) }.getOrNull() }
+            ?: return null
+        val queryData = renderContext.optString("queryData", "")
         if (queryData.isBlank()) {
             return null
         }
@@ -974,6 +1007,10 @@ class SteamWorkshopCatalog(private val context: android.content.Context) {
         val hoverRegex = Regex(
             """SharedFileBindMouseHover\(\s*"sharedfile_(\d+)"\s*,\s*false\s*,\s*(\{.*?\})\s*\);""",
             setOf(RegexOption.DOT_MATCHES_ALL),
+        )
+        val ssrDataScriptRegex = Regex(
+            """<script\b[^>]*\sid\s*=\s*(?:"valve-ssr-data"|'valve-ssr-data')[^>]*>(.*?)</script\s*>""",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
         )
         val ssrRenderContextRegex = Regex(
             """window\.SSR\.renderContext=JSON\.parse\("(.+?)"\);""",

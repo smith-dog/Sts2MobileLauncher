@@ -44,7 +44,10 @@ public final class ExtraSettingsRepository {
 	public static final String KEY_ANDROID_COMPAT_PACK_ENABLED = "android_compat_pack_enabled";
 	public static final String KEY_LOG_LEVEL = "log_level";
 	public static final String KEY_PERFORMANCE_OVERLAY_ENABLED = "android_performance_overlay_enabled";
-	public static final String KEY_HIGH_REFRESH_RATE_ENABLED = "android_high_refresh_rate_enabled";
+	public static final String KEY_DISPLAY_REFRESH_RATE_MODE = "android_display_refresh_rate_mode";
+	public static final String DISPLAY_REFRESH_RATE_HIGH = "high";
+	public static final String DISPLAY_REFRESH_RATE_60HZ = "60hz";
+	public static final String DISPLAY_REFRESH_RATE_SYSTEM = "system";
 	public static final String KEY_SCREEN_ROTATION_MODE = "android_screen_rotation_mode";
 	public static final String KEY_IN_GAME_OVERLAY_ENABLED = "android_in_game_overlay_enabled";
 	public static final String KEY_FLOATING_MOUSE_ENABLED = "android_floating_mouse_enabled";
@@ -58,10 +61,12 @@ public final class ExtraSettingsRepository {
 	public static final String SCREEN_ROTATION_USER_LANDSCAPE = "user_landscape";
 	public static final String SCREEN_ROTATION_LANDSCAPE = "landscape";
 	public static final String SCREEN_ROTATION_REVERSE_LANDSCAPE = "reverse_landscape";
+	public static final String SCREEN_ROTATION_PORTRAIT = "portrait";
 	public static final String TOOLTIP_MODE_IMMEDIATE = "immediate";
 	public static final String TOOLTIP_MODE_LONG_PRESS = "long_press";
 	public static final String TOOLTIP_MODE_HIDDEN = "hidden";
 
+	private static final String LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED = "android_high_refresh_rate_enabled";
 	private static final String MOD_SOURCE_MODS_DIRECTORY = "mods_directory";
 	private static final String MOD_GROUP_MARKER_FILE_NAME = ".sts2_mod_group";
 	private static final String MOD_GROUP_CORE_NAME = "core";
@@ -103,6 +108,7 @@ public final class ExtraSettingsRepository {
 		ensureDirectory(getAccountRootDir());
 		File modsRoot = getModsRootDir();
 		ensureDirectory(modsRoot);
+		recoverWorkshopInstallTransactions(modsRoot);
 		normalizeRuntimeModAliases(modsRoot);
 	}
 
@@ -187,7 +193,7 @@ public final class ExtraSettingsRepository {
 		settings.put("audio_compatibility_mode", false);
 		settings.put(KEY_LOG_LEVEL, getStoredLogLevel());
 		settings.put(KEY_PERFORMANCE_OVERLAY_ENABLED, isStoredPerformanceOverlayEnabled());
-		settings.put(KEY_HIGH_REFRESH_RATE_ENABLED, isStoredHighRefreshRateEnabled());
+		settings.put(KEY_DISPLAY_REFRESH_RATE_MODE, getStoredDisplayRefreshRateMode());
 		settings.put("android_volume_up_soft_keyboard", false);
 		settings.put("android_flip_screen_180", false);
 		settings.put(KEY_SCREEN_ROTATION_MODE, SCREEN_ROTATION_USER_LANDSCAPE);
@@ -253,8 +259,7 @@ public final class ExtraSettingsRepository {
 		changed |= normalizeExistingLogLevel(settings);
 		changed |= putIfMissing(settings, KEY_PERFORMANCE_OVERLAY_ENABLED, isStoredPerformanceOverlayEnabled());
 		changed |= syncExistingPerformanceOverlaySetting(settings);
-		changed |= putIfMissing(settings, KEY_HIGH_REFRESH_RATE_ENABLED, isStoredHighRefreshRateEnabled());
-		changed |= syncExistingHighRefreshRateSetting(settings);
+		changed |= syncExistingDisplayRefreshRateSetting(settings);
 		changed |= putIfMissing(settings, "android_volume_up_soft_keyboard", false);
 		changed |= putIfMissing(settings, "android_flip_screen_180", false);
 		changed |= ensureScreenRotationMode(settings);
@@ -307,6 +312,9 @@ public final class ExtraSettingsRepository {
 		}
 		if ("180".equals(normalized) || "flip_180".equals(normalized) || "rotate_180".equals(normalized) || "reverse".equals(normalized) || SCREEN_ROTATION_REVERSE_LANDSCAPE.equals(normalized)) {
 			return SCREEN_ROTATION_REVERSE_LANDSCAPE;
+		}
+		if (SCREEN_ROTATION_PORTRAIT.equals(normalized) || "portrait_mode".equals(normalized)) {
+			return SCREEN_ROTATION_PORTRAIT;
 		}
 		if ("user".equals(normalized) || "system".equals(normalized) || "follow_system".equals(normalized) || SCREEN_ROTATION_USER_LANDSCAPE.equals(normalized)) {
 			return SCREEN_ROTATION_USER_LANDSCAPE;
@@ -406,29 +414,65 @@ public final class ExtraSettingsRepository {
 		saveSetting(settings -> settings.put(KEY_PERFORMANCE_OVERLAY_ENABLED, enabled));
 	}
 
-	public boolean isHighRefreshRateEnabled(JSONObject settings) {
-		if (settings != null && settings.has(KEY_HIGH_REFRESH_RATE_ENABLED)) {
-			boolean enabled = settings.optBoolean(KEY_HIGH_REFRESH_RATE_ENABLED, true);
-			ExtraSettingsPreferences.setHighRefreshRateEnabled(context, enabled);
-			return enabled;
+	public String getDisplayRefreshRateMode(JSONObject settings) {
+		if (settings != null) {
+			if (settings.has(KEY_DISPLAY_REFRESH_RATE_MODE)) {
+				String normalized = normalizeDisplayRefreshRateMode(settings.optString(KEY_DISPLAY_REFRESH_RATE_MODE, null));
+				ExtraSettingsPreferences.setDisplayRefreshRateMode(context, normalized);
+				try {
+					settings.put(KEY_DISPLAY_REFRESH_RATE_MODE, normalized);
+					settings.remove(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED);
+				} catch (JSONException ignored) {
+				}
+				return normalized;
+			}
+			if (settings.has(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED)) {
+				String migrated = settings.optBoolean(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED, true)
+					? DISPLAY_REFRESH_RATE_HIGH
+					: DISPLAY_REFRESH_RATE_SYSTEM;
+				ExtraSettingsPreferences.setDisplayRefreshRateMode(context, migrated);
+				try {
+					settings.put(KEY_DISPLAY_REFRESH_RATE_MODE, migrated);
+					settings.remove(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED);
+				} catch (JSONException ignored) {
+				}
+				return migrated;
+			}
 		}
-		return isStoredHighRefreshRateEnabled();
+		return getStoredDisplayRefreshRateMode();
 	}
 
-	public boolean isHighRefreshRateEnabledForLaunch() {
-		boolean enabled = isStoredHighRefreshRateEnabled();
+	public String getDisplayRefreshRateModeForLaunch() {
+		String mode = getStoredDisplayRefreshRateMode();
 		try {
-			JSONObject settings = loadSettingsJson();
-			enabled = settings.optBoolean(KEY_HIGH_REFRESH_RATE_ENABLED, enabled);
+			mode = getDisplayRefreshRateMode(loadSettingsJson());
 		} catch (Exception ignored) {
 		}
-		ExtraSettingsPreferences.setHighRefreshRateEnabled(context, enabled);
-		return enabled;
+		mode = normalizeDisplayRefreshRateMode(mode);
+		ExtraSettingsPreferences.setDisplayRefreshRateMode(context, mode);
+		return mode;
 	}
 
-	public void saveHighRefreshRateEnabled(boolean enabled) throws Exception {
-		ExtraSettingsPreferences.setHighRefreshRateEnabled(context, enabled);
-		saveSetting(settings -> settings.put(KEY_HIGH_REFRESH_RATE_ENABLED, enabled));
+	public void saveDisplayRefreshRateMode(String value) throws Exception {
+		String normalized = normalizeDisplayRefreshRateMode(value);
+		saveSetting(settings -> {
+			settings.put(KEY_DISPLAY_REFRESH_RATE_MODE, normalized);
+			settings.remove(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED);
+		});
+		ExtraSettingsPreferences.setDisplayRefreshRateMode(context, normalized);
+	}
+
+	public static String normalizeDisplayRefreshRateMode(String value) {
+		if (DISPLAY_REFRESH_RATE_HIGH.equals(value)) {
+			return DISPLAY_REFRESH_RATE_HIGH;
+		}
+		if (DISPLAY_REFRESH_RATE_60HZ.equals(value)) {
+			return DISPLAY_REFRESH_RATE_60HZ;
+		}
+		if (DISPLAY_REFRESH_RATE_SYSTEM.equals(value)) {
+			return DISPLAY_REFRESH_RATE_SYSTEM;
+		}
+		return DISPLAY_REFRESH_RATE_HIGH;
 	}
 
 	public static String normalizeLogLevel(String value) {
@@ -467,8 +511,8 @@ public final class ExtraSettingsRepository {
 		return ExtraSettingsPreferences.isPerformanceOverlayEnabled(context);
 	}
 
-	private boolean isStoredHighRefreshRateEnabled() {
-		return ExtraSettingsPreferences.isHighRefreshRateEnabled(context);
+	private String getStoredDisplayRefreshRateMode() {
+		return normalizeDisplayRefreshRateMode(ExtraSettingsPreferences.getDisplayRefreshRateMode(context));
 	}
 
 	private boolean syncExistingPerformanceOverlaySetting(JSONObject settings) throws JSONException {
@@ -481,14 +525,33 @@ public final class ExtraSettingsRepository {
 		return true;
 	}
 
-	private boolean syncExistingHighRefreshRateSetting(JSONObject settings) throws JSONException {
-		boolean enabled = settings.optBoolean(KEY_HIGH_REFRESH_RATE_ENABLED, isStoredHighRefreshRateEnabled());
-		ExtraSettingsPreferences.setHighRefreshRateEnabled(context, enabled);
-		if (settings.has(KEY_HIGH_REFRESH_RATE_ENABLED)) {
-			return false;
+	private boolean syncExistingDisplayRefreshRateSetting(JSONObject settings) throws JSONException {
+		String normalized;
+		boolean changed = false;
+		if (settings.has(KEY_DISPLAY_REFRESH_RATE_MODE)) {
+			String raw = settings.optString(KEY_DISPLAY_REFRESH_RATE_MODE, null);
+			normalized = normalizeDisplayRefreshRateMode(raw);
+			if (!normalized.equals(raw)) {
+				settings.put(KEY_DISPLAY_REFRESH_RATE_MODE, normalized);
+				changed = true;
+			}
+		} else if (settings.has(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED)) {
+			normalized = settings.optBoolean(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED, true)
+				? DISPLAY_REFRESH_RATE_HIGH
+				: DISPLAY_REFRESH_RATE_SYSTEM;
+			settings.put(KEY_DISPLAY_REFRESH_RATE_MODE, normalized);
+			changed = true;
+		} else {
+			normalized = getStoredDisplayRefreshRateMode();
+			settings.put(KEY_DISPLAY_REFRESH_RATE_MODE, normalized);
+			changed = true;
 		}
-		settings.put(KEY_HIGH_REFRESH_RATE_ENABLED, enabled);
-		return true;
+		if (settings.has(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED)) {
+			settings.remove(LEGACY_KEY_HIGH_REFRESH_RATE_ENABLED);
+			changed = true;
+		}
+		ExtraSettingsPreferences.setDisplayRefreshRateMode(context, normalized);
+		return changed;
 	}
 
 	public void applyFirstRunDefaults() throws Exception {
@@ -768,12 +831,16 @@ public final class ExtraSettingsRepository {
 		if (preparedImport == null || preparedImport.stagingRoot == null || !preparedImport.stagingRoot.isDirectory()) {
 			throw new IOException("Prepared MOD import is no longer available.");
 		}
+		File stagingInstallRoot = null;
+		File backupInstallRoot = null;
+		File installRoot = null;
+		boolean handedOff = false;
 		try {
 			List<ModImportConflict> idConflicts = replaceExistingConflicts ? findCurrentWorkshopImportConflicts(preparedImport, rawGroupName, publishedFileId, workshopBranch) : Collections.emptyList();
 			if (replaceExistingConflicts) {
 				deleteExistingImportConflicts(idConflicts);
 			}
-			File installRoot = getWorkshopItemInstallDir(rawGroupName, publishedFileId, workshopBranch);
+			installRoot = getWorkshopItemInstallDir(rawGroupName, publishedFileId, workshopBranch);
 			File branchDirectory = installRoot.getParentFile();
 			if (branchDirectory != null) {
 				ensureDirectory(branchDirectory);
@@ -782,17 +849,72 @@ public final class ExtraSettingsRepository {
 			if (groupDirectory != null) {
 				ensureDirectory(groupDirectory);
 			}
-			deleteRecursively(installRoot);
-			ensureDirectory(installRoot);
-			copyDirectoryContents(preparedImport.stagingRoot, installRoot);
-			normalizeRuntimeModAliases(installRoot);
+			File parent = installRoot.getParentFile();
+			if (parent == null) {
+				throw new IOException("Workshop install directory has no parent: " + installRoot);
+			}
+			String safeName = installRoot.getName();
+			stagingInstallRoot = new File(parent, "." + safeName + ".incoming-" + UUID.randomUUID());
+			backupInstallRoot = new File(parent, "." + safeName + ".backup-" + UUID.randomUUID());
+			ensureDirectory(stagingInstallRoot);
+			copyDirectoryContents(preparedImport.stagingRoot, stagingInstallRoot);
+			normalizeRuntimeModAliases(stagingInstallRoot);
+			if (installRoot.exists() || isSymbolicLink(installRoot)) {
+				if (!installRoot.renameTo(backupInstallRoot)) {
+					throw new IOException("Unable to stage existing Workshop install: " + installRoot);
+				}
+			}
+			if (!stagingInstallRoot.renameTo(installRoot)) {
+				if (backupInstallRoot.exists()) {
+					backupInstallRoot.renameTo(installRoot);
+				}
+				throw new IOException("Unable to publish Workshop install: " + installRoot);
+			}
 			JSONObject settings = loadSettingsJson();
 			ensureModSettings(settings).put("mods_enabled", true);
 			saveSettingsJson(settings);
 			List<ModEntry> installedEntries = listInstalledModManifestsUnder(installRoot);
-			return new WorkshopModImportResult(installRoot, installedEntries, preparedImport.normalizedName);
+			WorkshopModImportResult result = new WorkshopModImportResult(installRoot, installedEntries, preparedImport.normalizedName, backupInstallRoot.exists() ? backupInstallRoot : null);
+			handedOff = true;
+			return result;
+		} catch (Exception exception) {
+			if (!handedOff) {
+				if (installRoot != null && installRoot.exists() && backupInstallRoot != null && backupInstallRoot.exists()) {
+					deleteRecursively(installRoot);
+				}
+				if (installRoot != null && !installRoot.exists() && backupInstallRoot != null && backupInstallRoot.exists()) {
+					backupInstallRoot.renameTo(installRoot);
+				}
+				if (stagingInstallRoot != null && stagingInstallRoot.exists()) {
+					deleteRecursively(stagingInstallRoot);
+				}
+			}
+			throw exception;
 		} finally {
 			discardPreparedModImport(preparedImport);
+		}
+	}
+
+	public void finalizeWorkshopModImport(WorkshopModImportResult result) {
+		if (result == null || result.backupRoot == null || !result.backupRoot.exists()) {
+			return;
+		}
+		try {
+			deleteRecursively(result.backupRoot);
+		} catch (RuntimeException ignored) {
+			// The published install and index remain usable; startup recovery will retry cleanup.
+		}
+	}
+
+	public void rollbackWorkshopModImport(WorkshopModImportResult result) {
+		if (result == null || result.installRoot == null) {
+			return;
+		}
+		if (result.installRoot.exists() && result.backupRoot != null && result.backupRoot.exists()) {
+			deleteRecursively(result.installRoot);
+		}
+		if (!result.installRoot.exists() && result.backupRoot != null && result.backupRoot.exists()) {
+			result.backupRoot.renameTo(result.installRoot);
 		}
 	}
 
@@ -2843,6 +2965,46 @@ public final class ExtraSettingsRepository {
 		}
 	}
 
+	private void recoverWorkshopInstallTransactions(File root) {
+		if (root == null || !root.isDirectory() || isSymbolicLink(root)) {
+			return;
+		}
+		File[] children = root.listFiles();
+		if (children == null) {
+			return;
+		}
+		for (File child : children) {
+			if (child == null || !child.isDirectory() || isSymbolicLink(child)) {
+				continue;
+			}
+			String name = child.getName();
+			int marker = name.indexOf(".backup-");
+			if (name.startsWith(".") && marker > 1) {
+				File target = new File(child.getParentFile(), name.substring(1, marker));
+				if (target.exists()) {
+					deleteRecursively(child);
+				} else {
+					child.renameTo(target);
+				}
+			}
+		}
+		children = root.listFiles();
+		if (children == null) {
+			return;
+		}
+		for (File child : children) {
+			if (child == null || !child.isDirectory() || isSymbolicLink(child)) {
+				continue;
+			}
+			String name = child.getName();
+			if (name.startsWith(".") && name.contains(".incoming-")) {
+				deleteRecursively(child);
+			} else if (!name.startsWith(".")) {
+				recoverWorkshopInstallTransactions(child);
+			}
+		}
+	}
+
 	private boolean isSameOrDescendant(File file, File possibleAncestor) {
 		if (file == null || possibleAncestor == null) {
 			return false;
@@ -3085,11 +3247,13 @@ public final class ExtraSettingsRepository {
 
 	public static final class WorkshopModImportResult {
 		public final File installRoot;
+		public final File backupRoot;
 		public final List<ModEntry> installedEntries;
 		public final String importedName;
 
-		WorkshopModImportResult(File installRoot, List<ModEntry> installedEntries, String importedName) {
+		WorkshopModImportResult(File installRoot, List<ModEntry> installedEntries, String importedName, File backupRoot) {
 			this.installRoot = installRoot;
+			this.backupRoot = backupRoot;
 			this.installedEntries = Collections.unmodifiableList(new ArrayList<>(installedEntries));
 			this.importedName = importedName == null ? "" : importedName;
 		}

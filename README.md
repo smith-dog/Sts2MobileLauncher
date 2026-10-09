@@ -38,10 +38,16 @@ This project is an experimental, unofficial Android port and launcher framework 
 
 **The core architecture consists of three layers:**
 1. **Android Launcher Shell (`android/`):** Handles game data importing, Steam login and game downloading, Steam Workshop public browsing, direct ID/URL opening, and download tracking with default compatible-access routing for networks where Steam Community/API or SteamPipe CDN direct connections time out, local save snapshots, Steam Cloud/WebDAV save syncing, and local file/MOD management. Once everything is ready, it boots up the Godot game process.
+The launcher utility pages use a compact dark Material 3 shell, including toolbars, dialogs, and bottom sheets. File Browser provides clickable breadcrumbs, a clipboard banner, name/time/size sorting, add/import actions, and readable contextual multi-select controls. Logs provides source/date filtering and a **Package latest** action that shares the newest live `godot.log` and `sts2.log`, excluding archives. File multi-selection offers share/export; the line-numbered viewer switches between whole-file actions and copy/share/expand-range actions, with working wrap/horizontal-scroll modes, in-file search, and smooth pinch-to-resize text. The Workshop page is unchanged by this UI update.
+The log list scan runs off the UI thread with an iterative traversal that avoids per-directory sorting and unnecessary canonical-path work. It publishes discovered entries in small batches, so the list can populate progressively while a native circular progress indicator and scanning status remain visible until traversal completes.
 2. **Android Compatibility Pack (`port-mod/` submodule):** Acts as a low-level hook (based on Harmony), loaded at the very beginning of the game boot process. It intercepts and fixes various PC-to-Android incompatibilities (e.g., input adaptation, path redirection, PC-specific shader replacement, Mod loader bridging).
 3. **Base Game (Provided by User):** Supplied by the user either by importing the PC version's `SlayTheSpire2.zip` or by legally downloading it via the SteamPipe API after logging into their Steam account within the app.
 
+The log viewer's **LLM analysis** menu opens an optional, separate conversation page. Configure a trusted OpenAI-compatible Chat Completions endpoint, API key, model ID, and optional reasoning effort. Connection settings are encrypted locally. After explicit consent, the first request contains only the question and authorized file metadata; the model explores evidence through bounded `read_lines` and literal `search_logs` tool calls instead of receiving the whole log. Tool results can contain private data, so use a trusted service, preferably over HTTPS. See [module boundaries and usage](doc/architecture/project-structure.md#31-日志分析模块).
+
 The Steam game-download page's **Custom** card supports either a branch name or an exact **ManifestID**. Manifest mode can read the current manifests of visible Steam branches or accept a manually entered ManifestID for the Windows depot (`2868841`); the list is not a historical catalog. Downloads still require an account that owns the game and Steam authorization. Unavailable snapshots do not fall back to another version, and downloading an older build does not guarantee Android compatibility. Use an isolated launch profile for old saves/MODs. See the [Steam download flow](doc/plan/steam/steam-login-download-cloud-plan.md#92-ui-入口).
+
+Steam Cloud and WebDAV keep normal saves (`profile1–3/saves`) and MOD saves (`modded/profile1–3/saves`) separate, including their `profile.save` selectors. A PC UI-only or quick-restart MOD may still select the MOD save directory; syncing does not merge it into normal saves. On a MOD-free phone, back up both save sets, then explicitly use **Extra Settings → MOD Save Transfer → MOD Save → Normal Save** if appropriate. This overwrites destination slots and cannot convert MOD-specific content. See [save path mapping](doc/plan/steam/steam-login-download-cloud-plan.md#102-本地路径映射).
 
 Custom player counts above four remain experimental. The full compatibility pack now dynamically creates treasure relic holders and rest-site character slots, including safe fifth-player focus and distinct treasure award/fight hand placement; this fixes the five-player chest flow that previously stopped after rock-paper-scissors. Other vanilla screens may still contain four-player assumptions, so the configurable capacity is not a guarantee that every player count is supported end to end.
 On Android, the full compatibility pack restores the multiplayer reaction button that is missing from the imported PC scene. It remains available after entering a multiplayer lobby, including the character/ready screen and visible wait overlays, not only after the run has started. Touch and drag from the floating button to choose one of the original reaction-wheel wedges, then release to send it through the payload's existing reaction synchronizer. The wheel is centered on the button in viewport coordinates, and its selection animation keeps a stable neutral position for every wedge after responsive Canvas/UI resizing, so pointing around a full circle no longer shifts the wheel toward the lower-right. On release, the viewport center is converted back to the reaction container's control space before the original local animation and network normalization run, keeping the sent reaction visible under scaled Canvas layouts. The Extra Settings → System switch `Show multiplayer emoji button` controls the button at runtime and defaults to enabled.
@@ -174,19 +180,30 @@ tools/package/build_importer_apk.sh
 ```
 Upon successful build, the APK will be output to `dist/sts2-re-importer.apk`.
 
-Android high-refresh support is part of the normal APK: the app declares the
-Android game category so OEM game/GPU scheduling can recognize `GodotApp`, then
-requests the highest compatible refresh rate only while the game is resumed,
-focused, and backed by a valid render `Surface`. Requests are coalesced per
-Activity lifecycle and cancelled when the game pauses or its `Surface` is
-destroyed. For each valid Surface epoch, Android 12+ issues one
-`Surface.setFrameRate(..., CHANGE_FRAME_RATE_ALWAYS)` vote together with the
-matching exact `Window` display mode when Android exposes one; devices that
-only expose an alternative refresh rate use a refresh-rate-only Window request
-with the exact mode ID cleared. A bounded delayed verification follows, and the
-path does not use `SurfaceControl`. This behavior can be
-disabled from Extra Settings → System below Preload. A disabled-by-default
-performance overlay can also be enabled from Extra Settings → System.
+Android display refresh rate is selectable in Extra Settings → System below
+Preload: **High refresh (default)** requests the highest compatible rate,
+**Request 60Hz** requests an exposed same-size 60Hz mode (including 59.94Hz), and
+**Follow system** clears the app's Window preference and Surface frame-rate vote.
+If Android exposes no compatible 60Hz target, the app clears its previous request
+and leaves the display to the system; it does not substitute 50/90/120Hz or claim
+that the display is locked. These choices do not change the game's FPS cap or VSync.
+
+Requests require a resumed, focused Activity and a valid render `Surface`, and
+are cancelled on pause, focus loss, or Surface destruction. Android 12+ uses
+`Surface.setFrameRate(..., CHANGE_FRAME_RATE_ALWAYS)` with an exact Window mode
+when available, or a refresh-rate-only preference with the mode ID cleared.
+Unchanged requests do not re-vote on the same Surface; mode changes update or
+clear the vote. Delayed verification checks the actual mode and Hz, without
+`SurfaceControl`. The profile setting is `android_display_refresh_rate_mode`
+(`high` / `60hz` / `system`); old high-refresh booleans migrate to `high` or
+`system`. A disabled-by-default performance overlay is also available here.
+
+Combat VFX reuse remains an explicit, room-local whitelist: damage numbers,
+hit sparks, shivs, big slashes, and fire bursts, with idle limits of
+16/8/8/2/2. Additional simultaneous effects are still fully created. Unknown
+child scripts or foreign factory/lifecycle/tint patches keep the original
+allocation path. This does not change effect counts, gameplay, preload scope,
+or GC settings, and it does not remove first-use resource/shader work.
 
 The fullscreen render-resolution preset is applied by the full compatibility
 pack at game startup and can also be switched immediately from the in-game
@@ -197,6 +214,17 @@ the current CanvasItems aspect (for example, a 1280×720 preset becomes 1600×72
 on a 2400×1080 attachment). Android Surface size and the high-refresh request are
 left untouched; aspect-ratio, UI-scale, global-scale, and font-scale settings
 continue to apply independently.
+
+Extra Settings → Graphics → Graphics parameters → Rotation mode also offers
+**Portrait (requires portrait UI MOD)**. It is opt-in; the default remains
+**Follow system**, limited to landscape. Install and enable a compatible portrait
+UI MOD separately before using it; the launcher does not supply a portrait UI.
+With the updated full compat pack, portrait mode uses a 1080-wide logical canvas
+whose height follows the physical portrait aspect. Stored landscape aspect and
+UI-scale choices are retained but do not override this canvas; game scale and
+font scale remain independent. Selecting a landscape mode restores the stored
+aspect/UI-scale behavior. Render resolution remains a separate renderer setting.
+
 
 ### 7. ADB Automation Debugging
 For connected-device debugging, the repository includes an ADB harness that can install the APK, push a payload/compat pack/MOD into app-private storage, run launch preparation, start the game, and collect logs or Perfetto traces:
