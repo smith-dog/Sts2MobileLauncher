@@ -393,6 +393,7 @@ public class GodotApp extends GodotActivity {
 		appendSts2LogLevelCommandLineArgs(commandLine);
 		File pckFile = new File(getGameDir(), PCK_FILE_NAME);
 		if (pckFile.isFile()) {
+			FramePacingOverride.ensurePresent(pckFile.getParentFile());
 			commandLine.add("--main-pack");
 			commandLine.add(pckFile.getAbsolutePath());
 			Log.i(TAG, "Loading imported game PCK: " + pckFile.getAbsolutePath());
